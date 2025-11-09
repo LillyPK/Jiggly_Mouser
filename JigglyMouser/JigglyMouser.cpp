@@ -7,15 +7,11 @@
 #include <atomic>
 #include <mutex>
 
-//int screenWidth = GetSystemMetrics(SM_CXSCREEN);    // Screen Width Variable
-//int screenHeight = GetSystemMetrics(SM_CYSCREEN);   // Screen Height Variable
-//int centerX = screenWidth / 2;                      // Doesnt really need explained
-//int centerY = screenHeight / 2;                     // Also doesnt need explained
-//int radius = 200;                                   // Bounds distance from the center for the mouse movements
-
-
-int centerX = GetSystemMetrics(SM_CXSCREEN) / 2;
-int centerY = GetSystemMetrics(SM_CYSCREEN) / 2;
+int screenWidth = GetSystemMetrics(SM_CXSCREEN);    // Screen Width Variable
+int screenHeight = GetSystemMetrics(SM_CYSCREEN);   // Screen Height Variable
+int centerX = screenWidth / 2;                      // Doesnt really need explained
+int centerY = screenHeight / 2;                     // Also doesnt need explained
+int radius = 200;                                   // Bounds distance from the center for the mouse movements
 int intervalSeconds, startDelay;                    // If you used the program you would know what these are
 
 std::atomic<bool> running(true);
@@ -25,15 +21,45 @@ std::mutex posMutex;                                // Mutex for position tracki
 
 POINT lastKnownPos;                                 // Last position set by program
 
+// Function to get the monitor that the mouse is currently on
+HMONITOR getCurrentMonitor() {
+    POINT pt;
+    GetCursorPos(&pt);
+    return MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+}
+
+// Function to update screen bounds based on current monitor
+void updateScreenBounds() {
+    HMONITOR hMonitor = getCurrentMonitor();
+    MONITORINFO mi;
+    mi.cbSize = sizeof(MONITORINFO);
+
+    if (GetMonitorInfo(hMonitor, &mi)) {
+        screenWidth = mi.rcMonitor.right - mi.rcMonitor.left;
+        screenHeight = mi.rcMonitor.bottom - mi.rcMonitor.top;
+        centerX = mi.rcMonitor.left + screenWidth / 2;
+        centerY = mi.rcMonitor.top + screenHeight / 2;
+    }
+}
+
 void monitorMouseMovement() {
     POINT currentPos;
     GetCursorPos(&currentPos);
     lastKnownPos = currentPos;
+    HMONITOR lastMonitor = getCurrentMonitor();
 
     while (running) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Check every 100ms
 
         GetCursorPos(&currentPos);
+        HMONITOR currentMonitor = getCurrentMonitor();
+
+        // Check if monitor changed
+        if (currentMonitor != lastMonitor) {
+            std::cout << "\nMonitor changed! Updating screen bounds...\n";
+            updateScreenBounds();
+            lastMonitor = currentMonitor;
+        }
 
         // Check if mouse moved AND it wasn't moved by the program
         bool movedByUser = false;
@@ -60,7 +86,7 @@ void moveMousePeriodically(int intervalSeconds) {
     std::random_device rd;      // Sets random_device to the rd variable
     std::mt19937 gen(rd());     // But Mother, i dont want to explain this
     std::uniform_real_distribution<double> angleDist(0, 2 * 3.14159265358979323846);    // oooooo fancy math i learned in Jr.High
-    std::uniform_real_distribution<double> radiusDist(0, 200);                       // some times they ask you if you're fine
+    std::uniform_real_distribution<double> radiusDist(0, radius);                       // some times they ask you if you're fine
 
     // Initial delay countdown
     std::cout << "Starting delay countdown:\n";
@@ -102,6 +128,9 @@ void moveMousePeriodically(int intervalSeconds) {
         }
 
         if (!running) break;
+
+        // Update screen bounds before moving (in case monitor changed during delay)
+        updateScreenBounds();
 
         // Move mouse
         double angle = angleDist(gen);      // Double persision float angle variable that equals angleDist
