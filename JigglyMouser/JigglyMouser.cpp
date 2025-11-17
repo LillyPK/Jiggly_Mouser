@@ -17,18 +17,17 @@ int intervalSeconds, startDelay;                    // If you used the program y
 std::atomic<bool> running(true);
 std::atomic<bool> programMoving(false);             // Track if program is currently moving mouse
 std::atomic<int> delayCounter(0);                   // Counter for delay period
+std::atomic<DWORD> lastPenActivity(0);              // Track last pen/tablet activity
 std::mutex posMutex;                                // Mutex for position tracking
 
 POINT lastKnownPos;                                 // Last position set by program
 
-// Function to get the monitor that the mouse is currently on
 HMONITOR getCurrentMonitor() {
     POINT pt;
     GetCursorPos(&pt);
     return MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
 }
 
-// Function to update screen bounds based on current monitor
 void updateScreenBounds() {
     HMONITOR hMonitor = getCurrentMonitor();
     MONITORINFO mi;
@@ -42,7 +41,7 @@ void updateScreenBounds() {
     }
 }
 
-// Returns true if the user has interacted with mouse or keyboard very recently
+// Returns true if the user has interacted with mouse, keyboard, or tablet very recently
 bool userActivityDetected() {
     LASTINPUTINFO lii;
     lii.cbSize = sizeof(LASTINPUTINFO);
@@ -54,7 +53,33 @@ bool userActivityDetected() {
     DWORD idleMs = now - lii.dwTime;
 
     // If the user did something within the last 150ms, count it as activity
-    return idleMs < 150;
+    if (idleMs < 150) {
+        return true;
+    }
+
+    // Check for pen/tablet input using GetMessageExtraInfo
+    DWORD extraInfo = GetMessageExtraInfo();
+    // Signature for pen/touch input (0xFF515700 series)
+    // Check if it's pen/stylus input
+    if ((extraInfo & 0xFFFFFF00) == 0xFF515700) {
+        lastPenActivity = now;
+        return true;
+    }
+
+    // Also check if pen was used recently
+    DWORD timeSinceLastPen = now - lastPenActivity.load();
+    if (timeSinceLastPen < 150) {
+        return true;
+    }
+
+    // Additional check: see if tablet buttons are pressed
+    // Wacom tablets often use these as side buttons
+    if (GetAsyncKeyState(VK_XBUTTON1) & 0x8000 ||
+        GetAsyncKeyState(VK_XBUTTON2) & 0x8000) {
+        return true;
+    }
+
+    return false;
 }
 
 void monitorMouseMovement() {
@@ -76,7 +101,7 @@ void monitorMouseMovement() {
             lastMonitor = currentMonitor;
         }
 
-        // Check for any global user activity such as keyboard or mouse
+        // Check for any global user activity such as keyboard, mouse, or tablet
         bool activity = userActivityDetected();
 
         if (activity) {
@@ -160,17 +185,17 @@ void moveMousePeriodically(int intervalSeconds) {
 }
 
 int main() {
-    std::cout << "Enter the seconds between mouse movements: ";     // Prints a message to the screen
-    std::cin >> intervalSeconds;                                    // cin stands for "character input" its input for "int intervalSeconds"
-    std::cout << "Enter the delay /s before starting: ";            // Prints another message to the screen
-    std::cin >> startDelay;                                         // is input for "int startDelay"
+    std::cout << "Enter the seconds between mouse movements: ";
+    std::cin >> intervalSeconds;
+    std::cout << "Enter the delay /s before starting: ";
+    std::cin >> startDelay;
 
-    std::thread mouseMonitor(monitorMouseMovement);                 // Thread to monitor user mouse movement
-    std::thread mouseMover(moveMousePeriodically, intervalSeconds); // my hands hurt
+    std::thread mouseMonitor(monitorMouseMovement);
+    std::thread mouseMover(moveMousePeriodically, intervalSeconds);
 
-    std::cout << "\nPress Enter to stop the program...\n"; // prints a message to the screen
+    std::cout << "\nPress Enter to stop the program...\n";
     std::cin.get();
-    std::cin.get(); // look this was someone on stack overflows fix and it works. dont ask how, why, when, where, who. just know it works
+    std::cin.get();
 
     running = false;
 
@@ -181,6 +206,8 @@ int main() {
     if (mouseMover.joinable()) {
         mouseMover.join();
     }
+
+    std::cout << "Program stopped.\n";
 
     return 0;
 }
