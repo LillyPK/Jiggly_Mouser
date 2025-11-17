@@ -42,6 +42,21 @@ void updateScreenBounds() {
     }
 }
 
+// Returns true if the user has interacted with mouse or keyboard very recently
+bool userActivityDetected() {
+    LASTINPUTINFO lii;
+    lii.cbSize = sizeof(LASTINPUTINFO);
+    if (!GetLastInputInfo(&lii)) {
+        return false;
+    }
+
+    DWORD now = GetTickCount();
+    DWORD idleMs = now - lii.dwTime;
+
+    // If the user did something within the last 150ms, count it as activity
+    return idleMs < 150;
+}
+
 void monitorMouseMovement() {
     POINT currentPos;
     GetCursorPos(&currentPos);
@@ -56,27 +71,19 @@ void monitorMouseMovement() {
 
         // Check if monitor changed
         if (currentMonitor != lastMonitor) {
-            std::cout << "\nMonitor changed! Updating screen bounds...\n";
+            std::cout << "\nMonitor changed. Updating screen bounds...\n";
             updateScreenBounds();
             lastMonitor = currentMonitor;
         }
 
-        // Check if mouse moved AND it wasn't moved by the program
-        bool movedByUser = false;
-        {
-            std::lock_guard<std::mutex> lock(posMutex);
-            if ((currentPos.x != lastKnownPos.x || currentPos.y != lastKnownPos.y)) {
-                movedByUser = true;
-                lastKnownPos = currentPos;
-            }
-        }
+        // Check for any global user activity such as keyboard or mouse
+        bool activity = userActivityDetected();
 
-        if (movedByUser) {
+        if (activity) {
             if (programMoving) {
-                std::cout << "\nUser movement detected! Stopping program and resetting delay...\n";
+                std::cout << "\nUser activity detected. Stopping program and resetting delay...\n";
                 programMoving = false;
             }
-            // Reset counter regardless of program state
             delayCounter = 0;
         }
     }
