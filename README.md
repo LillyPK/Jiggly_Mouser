@@ -13,7 +13,7 @@ Currently, there is no dedicated installer.
 
 > go to the [releases](https://github.com/LillyPK/Jiggly_Mouser/releases) page and download the latest version. and put the exe somewhere safe thats also easy to access.
 
-# Compileing
+# Compiling
 run build.bat and the exe will be in the build folder.
 ## if you get errors:
   make sure to have MinGW-w64 installed.
