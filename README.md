@@ -31,6 +31,3 @@ run build.bat and the exe will be in the build folder.
 Thank you for using Jiggly_Mouser! If you have any questions or feedback, please feel free to open an issue or submit a pull request.
 
 This is my passion project I created it to help my mom out. Like all of us, sometimes we need a break from our screens and this is what I made to help her.
-
-# Contributing
-Contributions are welcome! Please open an issue or submit a pull request.
