@@ -139,33 +139,168 @@ inline void platformSetCursorPos(int x, int y) {
 
 #elif defined(__linux__)
 
-// -------------------------------------------------------
-// Linux/X11 stubs - builds clean, does nothing
-// Real X11 implementation goes here when linux support is added
-// Will need: #include <X11/Xlib.h>
-//            #include <X11/extensions/XInput2.h>
-// -------------------------------------------------------
+#include <X11/Xlib.h>
+#include <X11/extensions/Xrandr.h>
 
-inline void updateScreenBounds() {
-    // TODO: XRandR screen bounds detection goes here
+// -------------------------------------------------------
+// Linux/X11 globals
+// -------------------------------------------------------
+inline Display* xDisplay   = nullptr;   // Connection to the X server
+inline Window   xRootWin   = 0;         // Root window of the default screen
+inline int      xLastMouseX = 0;        // Last known mouse X for cursor pos tracking
+inline int      xLastMouseY = 0;        // Last known mouse Y for cursor pos tracking
+
+// Opens the X display connection if not already open
+// Returns true if display is available
+inline bool ensureDisplay() {
+    if (xDisplay == nullptr) {
+        xDisplay = XOpenDisplay(nullptr);
+        if (xDisplay == nullptr) {
+            std::cerr << "Failed to open X display.\n";
+            return false;
+        }
+        xRootWin = XRootWindow(xDisplay, DefaultScreen(xDisplay));
+    }
+    return true;
 }
 
+// Gets the current cursor position via XQueryPointer
+// Returns true on success, fills outX and outY
+inline bool getCursorPos(int& outX, int& outY) {
+    if (!ensureDisplay()) return false;
+
+    Window rootReturn, childReturn;
+    int rootX, rootY, winX, winY;
+    unsigned int maskReturn;
+
+    Bool result = XQueryPointer(
+        xDisplay, xRootWin,
+        &rootReturn, &childReturn,
+        &rootX, &rootY,
+        &winX, &winY,
+        &maskReturn
+    );
+
+    if (result) {
+        outX = rootX;
+        outY = rootY;
+    }
+
+    return result == True;
+}
+
+// Walks all XRandR CRTCs to find which monitor the cursor is currently on
+// Sets screenWidth, screenHeight, centerX, centerY from that monitor's geometry
+inline void updateScreenBounds() {
+    if (!ensureDisplay()) return;
+
+    int curX = 0, curY = 0;
+    if (!getCursorPos(curX, curY)) return;
+
+    XRRScreenResources* res = XRRGetScreenResources(xDisplay, xRootWin);
+    if (!res) {
+        std::cerr << "Failed to get XRandR screen resources.\n";
+        return;
+    }
+
+    for (int i = 0; i < res->ncrtc; i++) {
+        XRRCrtcInfo* crtc = XRRGetCrtcInfo(xDisplay, res, res->crtcs[i]);
+        if (!crtc) continue;
+
+        // Skip CRTCs with no outputs (disabled/inactive)
+        if (crtc->noutput == 0) {
+            XRRFreeCrtcInfo(crtc);
+            continue;
+        }
+
+        int monLeft   = crtc->x;
+        int monTop    = crtc->y;
+        int monRight  = crtc->x + (int)crtc->width;
+        int monBottom = crtc->y + (int)crtc->height;
+
+        // Check if cursor falls within this monitor's rectangle
+        if (curX >= monLeft && curX < monRight &&
+            curY >= monTop  && curY < monBottom) {
+            screenWidth  = (int)crtc->width;
+            screenHeight = (int)crtc->height;
+            centerX      = monLeft + screenWidth  / 2;
+            centerY      = monTop  + screenHeight / 2;
+
+            XRRFreeCrtcInfo(crtc);
+            break;
+        }
+
+        XRRFreeCrtcInfo(crtc);
+    }
+
+    XRRFreeScreenResources(res);
+}
+
+// Returns true if the user has interacted with mouse or keyboard very recently
+// Uses XQueryPointer to detect mouse movement
 inline bool userActivityDetected() {
-    // TODO: XScreenSaverQueryInfo idle detection goes here
+    if (!ensureDisplay()) return false;
+
+    int curX = 0, curY = 0;
+    if (!getCursorPos(curX, curY)) return false;
+
+    // If mouse position changed since last check, count it as activity
+    if (curX != xLastMouseX || curY != xLastMouseY) {
+        xLastMouseX = curX;
+        xLastMouseY = curY;
+        return true;
+    }
+
     return false;
 }
 
 inline void monitorMouseMovement() {
-    // TODO: XRandR monitor change detection goes here
+    if (!ensureDisplay()) return;
+
+    // Grab initial cursor position and screen bounds
+    getCursorPos(xLastMouseX, xLastMouseY);
+    updateScreenBounds();
+
+    // Track which monitor we started on by storing last known centerX/centerY
+    int lastCenterX = centerX;
+    int lastCenterY = centerY;
+
     while (running) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Check every 100ms
+
+        bool activity = userActivityDetected();
+
+        // Re-check bounds in case the cursor moved to a different monitor
+        updateScreenBounds();
+        if (centerX != lastCenterX || centerY != lastCenterY) {
+            std::cout << "\nMonitor changed. Updating screen bounds...\n";
+            lastCenterX = centerX;
+            lastCenterY = centerY;
+        }
+
+        if (activity) {
+            if (programMoving) {
+                std::cout << "\nUser activity detected. Stopping program and resetting delay...\n";
+                programMoving = false;
+            }
+            delayCounter = 0;
+        }
+    }
+
+    // Clean up X display connection on exit
+    if (xDisplay) {
+        XCloseDisplay(xDisplay);
+        xDisplay = nullptr;
     }
 }
 
 inline void platformSetCursorPos(int x, int y) {
-    // TODO: XWarpPointer goes here
-    (void)x;    // suppress unused warnings
-    (void)y;
+    if (!ensureDisplay()) return;
+    std::lock_guard<std::mutex> lock(posMutex);
+    XWarpPointer(xDisplay, None, xRootWin, 0, 0, 0, 0, x, y);
+    XFlush(xDisplay);   // XWarpPointer is buffered, flush pushes it immediately
+    xLastMouseX = x;
+    xLastMouseY = y;
 }
 
 #endif  // platform block
@@ -225,8 +360,8 @@ inline void moveMousePeriodically(int intervalSeconds) {
         updateScreenBounds();
 
         // Move mouse
-        double angle = angleDist(gen);
-        double distance = radiusDist(gen);
+        double angle = angleDist(gen);      // Double persision float angle variable that equals angleDist
+        double distance = radiusDist(gen);  // Double distance is what they call people not allowed near school zones
         int newX = static_cast<int>(centerX + distance * cos(angle));   // newX? first it was twitter, then X, and now its newX?
         int newY = static_cast<int>(centerY + distance * sin(angle));   // ooooooo more math that i forgot from highschool
 

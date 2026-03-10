@@ -8,9 +8,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(JigglyMouser JigglyMouser.cpp)
 
 # Add compile and link flags
-target_link_libraries(JigglyMouser
-    -static
-    -static-libgcc
-    -static-libstdc++
-    -pthread
-)
+if(WIN32)
+    target_link_libraries(JigglyMouser
+        -static
+        -static-libgcc
+        -static-libstdc++
+        -pthread
+    )
+elseif(UNIX)
+    target_link_libraries(JigglyMouser
+        -pthread
+        X11
+        Xrandr
+    )
+endif()
